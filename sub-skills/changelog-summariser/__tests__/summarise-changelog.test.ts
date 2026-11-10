@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
@@ -129,6 +129,100 @@ describe('parseChangelog', () => {
     expect(parseChangelog(CHANGELOG.replace(/\n/g, '\r\n'))).toHaveLength(4);
     expect(parseChangelog('')).toEqual([]);
   });
+});
+
+describe('entry continuations, references and unusual category names', () => {
+  const full = (name: string) =>
+    ['# Changelog', '', '## [Unreleased]', '', `### ${name}`].join('\n');
+
+  test('keeps an indented second paragraph and its links with the entry', () => {
+    const content = [
+      full('Added'),
+      '- Added gallery controls',
+      '',
+      `  Details in (${pr(1)}, ${issue(1)})`,
+      '',
+      '### Fixed',
+      `- Fixed thing (${pr(2)}, ${issue(2)})`
+    ].join('\n');
+    const release = parseChangelog(content)[0];
+    expect(release.categories.Added).toHaveLength(1);
+    expect(release.categories.Added[0].links.map((link) => link.url)).toEqual([
+      'https://github.com/o/r/pull/1',
+      'https://linear.app/o/issue/LS-1/slug'
+    ]);
+    const summary = summarise([release], { keepLatest: 0 });
+    expect(renderSummary(summary, 'CHANGELOG.md')).toContain('https://github.com/o/r/pull/1');
+    expect(renderNotes(release)).toContain('https://linear.app/o/issue/LS-1/slug');
+  });
+
+  const REFERENCE_CHANGELOG = [
+    '# Changelog',
+    '',
+    '## [2.0.0] - 2026-02-01',
+    '',
+    '### Added',
+    '- Added gallery ([PR #1][p1], [LS-1][i1])',
+    '',
+    '## [1.0.0] - 2026-01-01',
+    '',
+    '### Added',
+    '- Added base ([PR #2][p2], [LS-2][])',
+    '',
+    '[p1]: https://github.com/o/r/pull/1',
+    '[i1]: https://linear.app/o/issue/LS-1/slug',
+    '[p2]: https://github.com/o/r/pull/2',
+    '[LS-2]: https://linear.app/o/issue/LS-2/slug'
+  ].join('\n');
+
+  test('resolves reference-style links to their destinations', () => {
+    const [newer, older] = parseChangelog(REFERENCE_CHANGELOG);
+    expect(newer.categories.Added[0].links).toEqual([
+      { label: 'PR #1', url: 'https://github.com/o/r/pull/1', kind: 'pr' },
+      { label: 'LS-1', url: 'https://linear.app/o/issue/LS-1/slug', kind: 'issue' }
+    ]);
+    expect(older.categories.Added[0].links.map((link) => link.url)).toEqual([
+      'https://github.com/o/r/pull/2',
+      'https://linear.app/o/issue/LS-2/slug'
+    ]);
+  });
+
+  test('keeps referenced destinations in collapsed, full and notes output', () => {
+    const releases = parseChangelog(REFERENCE_CHANGELOG);
+    const collapsed = renderSummary(summarise(releases, { keepLatest: 1 }), 'CHANGELOG.md');
+    expect(collapsed).toContain('[PR #2](https://github.com/o/r/pull/2)');
+    expect(collapsed).toContain('[p1]: https://github.com/o/r/pull/1');
+    const notes = renderNotes(releases[0]);
+    expect(notes).toContain('[p1]: https://github.com/o/r/pull/1');
+    expect(notes).toContain('[i1]: https://linear.app/o/issue/LS-1/slug');
+    expect(notes).not.toContain('[p2]:');
+  });
+
+  test('ignores undefined references and definitions inside fences', () => {
+    const content = [
+      full('Added'),
+      '- Added thing ([PR #9][missing])',
+      '',
+      '```',
+      '[missing]: https://github.com/o/r/pull/9',
+      '```'
+    ].join('\n');
+    expect(parseChangelog(content)[0].categories.Added[0].links).toEqual([]);
+  });
+
+  test.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+    'handles a category named %s',
+    (name) => {
+      const content = [full(name), `- Entry (${pr(3)}, ${issue(3)})`].join('\n');
+      const releases = parseChangelog(content);
+      expect(Object.keys(releases[0].categories)).toEqual([name]);
+      const [summary] = summarise(releases);
+      expect(summary.counts[name]).toBe(1);
+      expect(renderSummary([summary], 'CHANGELOG.md')).toContain(`### ${name}`);
+      expect(renderNotes(releases[0])).toContain(`## ${name}`);
+      expect(JSON.parse(JSON.stringify(summary)).counts[name]).toBe(1);
+    }
+  );
 });
 
 describe('summarise', () => {
@@ -278,12 +372,21 @@ describe('main (in-process)', () => {
 describe('CLI process', () => {
   const script = fileURLToPath(new URL('../scripts/summarise-changelog.ts', import.meta.url));
   const node = ['--experimental-strip-types', '--no-warnings', script];
+  // Isolated, bounded child processes: temporary HOME/config, minimal environment, hard timeout.
+  const childOptions = () => ({
+    encoding: 'utf8' as const,
+    timeout: 30000,
+    env: {
+      PATH: dirname(process.execPath),
+      HOME: dir,
+      XDG_CONFIG_HOME: dir,
+      NODE_OPTIONS: ''
+    }
+  });
 
   test('summarises a changelog at a path containing spaces', () => {
     const file = write('spaced name.md', CHANGELOG);
-    const out = execFileSync(process.execPath, [...node, file, '--keep-latest', '1'], {
-      encoding: 'utf8'
-    });
+    const out = execFileSync(process.execPath, [...node, file, '--keep-latest', '1'], childOptions());
     expect(out).toContain('(collapsed, 3 entries)');
   });
 
@@ -301,7 +404,7 @@ describe('CLI process', () => {
     }
     const file = write('large.md', lines.join('\n'));
     const result = spawnSync(process.execPath, [...node, file, '--keep-latest', '0'], {
-      encoding: 'utf8',
+      ...childOptions(),
       maxBuffer: 64 * 1024 * 1024
     });
     expect(result.status).toBe(0);
@@ -315,7 +418,7 @@ describe('CLI process', () => {
   });
 
   test('exits 2 with usage when no file is given', () => {
-    const result = spawnSync(process.execPath, node, { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, node, childOptions());
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Usage:');
   });
