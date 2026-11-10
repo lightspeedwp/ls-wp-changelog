@@ -10,7 +10,7 @@
 
 - Basic format result (`isValid`)
 - Placeholder score (fixed at 85 on success, 0 on failure)
-- Placeholder governance status (the helper marks every principle `pass` without checking entries)
+- Placeholder governance status (for a readable file the helper marks every principle `pass` without checking entries; for a missing or unreadable path it marks all six `fail`)
 - Error messages if any
 - Separately, your manual findings and any checks you could not verify
 
@@ -47,7 +47,7 @@ Output (real helper output):
 }
 ```
 
-For a file with no `# Changelog` title the helper returns `"isValid": false`, `"score": 0`, the error `Missing "# Changelog" title`, and `"readyForRelease": false` (the governance fields still read `pass`).
+For a file with no `# Changelog` title the helper returns `"isValid": false`, `"score": 0`, the error `Missing "# Changelog" title`, and `"readyForRelease": false` (for this readable file the governance fields still read `pass`). For a missing or unreadable path the helper returns `"isValid": false`, `"score": 0`, a file error, `"readyForRelease": false` and all six governance fields as `fail`. Neither outcome establishes actual governance compliance.
 
 ## Success Criteria
 

@@ -4,7 +4,7 @@ Convert your `[Unreleased]` section to a versioned release with a date and seman
 
 ## Scope
 
-This prompt describes a manual edit of `CHANGELOG.md`. It does not commit, tag, push or publish anything; those are separate release actions that need explicit authorisation. Use the version and release date you are given, and do not invent either. The `(#1089)` style in the examples follows [Changelog Format](../docs/CHANGELOG_FORMAT.md); the [link verifier](../sub-skills/changelog-link-verifier/SKILL.md) is stricter and expects an adjacent PR link and issue link on each entry.
+This prompt describes a manual edit of `CHANGELOG.md`. It does not commit, tag, push or publish anything; those are separate release actions that need explicit authorisation. Derive the proposed new version from the current version and the release type (for example 1.0.0 with Minor gives 1.1.0), and use the release date you are given; do not invent the date or a different version. The `(#1089)` style in the examples follows [Changelog Format](../docs/CHANGELOG_FORMAT.md); the [link verifier](../sub-skills/changelog-link-verifier/SKILL.md) is stricter and expects an adjacent PR link and issue link on each entry.
 
 ## Input
 
