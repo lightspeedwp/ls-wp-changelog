@@ -51,7 +51,8 @@ interface FoundLink {
 
 const LINK_PATTERN = /\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const RELEASE_PATTERN = /^##\s+\[([^\]]+)\]/;
-const ENTRY_PATTERN = /^ {0,3}[-*+]\s+(\S.*)$/;
+const BULLET_PATTERN = /^( *)[-*+]\s+(\S.*)$/;
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
 const CONTINUATION_PATTERN = /^ {2,}\S/;
 const SEPARATOR_ONLY = /^[\s,;&/]*$/;
 
@@ -75,10 +76,24 @@ export function classifyLink(text: string, url: string): 'pr' | 'issue' | null {
   return null;
 }
 
+/** Character ranges covered by inline code spans, which render literally rather than as links. */
+function codeSpanRanges(entry: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const match of entry.matchAll(/(?<!`)(`+)(?!`)[\s\S]*?[^`]\1(?!`)/g)) {
+    const start = match.index ?? 0;
+    ranges.push([start, start + match[0].length]);
+  }
+  return ranges;
+}
+
 function findLinks(entry: string): FoundLink[] {
   const found: FoundLink[] = [];
+  const codeRanges = codeSpanRanges(entry);
   for (const match of entry.matchAll(LINK_PATTERN)) {
     const start = match.index ?? 0;
+    if (codeRanges.some(([from, to]) => start >= from && start < to)) {
+      continue;
+    }
     found.push({
       kind: classifyLink(match[1], match[2]),
       start,
@@ -130,7 +145,9 @@ export function verifyChangelog(content: string, options: VerifyOptions = {}): V
   const failures: EntryFailure[] = [];
   let checked = 0;
   let currentRelease: string | null = null;
-  let inFence = false;
+  let fence: { marker: string; length: number } | null = null;
+  let topIndent: number | null = null;
+  let inNested = false;
   let pending: { line: number; release: string; text: string } | null = null;
 
   const flush = (): void => {
@@ -147,17 +164,27 @@ export function verifyChangelog(content: string, options: VerifyOptions = {}): V
 
   const lines = content.split(/\r?\n/);
   lines.forEach((rawLine, index) => {
-    if (/^\s*(```|~~~)/.test(rawLine)) {
-      flush();
-      inFence = !inFence;
+    if (fence !== null) {
+      // Close only with the same marker, at least as long as the opener, and nothing after it.
+      const closer = rawLine.match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (closer && closer[1][0] === fence.marker && closer[1].length >= fence.length) {
+        fence = null;
+      }
       return;
     }
-    if (inFence) {
+    const opener = rawLine.match(FENCE_OPEN);
+    if (opener) {
+      flush();
+      topIndent = null;
+      inNested = false;
+      fence = { marker: opener[1][0], length: opener[1].length };
       return;
     }
     const releaseMatch = rawLine.match(RELEASE_PATTERN);
     if (releaseMatch) {
       flush();
+      topIndent = null;
+      inNested = false;
       currentRelease = releaseMatch[1];
       releases.push(currentRelease);
       return;
@@ -168,17 +195,33 @@ export function verifyChangelog(content: string, options: VerifyOptions = {}): V
     if (wanted !== null && normaliseVersion(currentRelease) !== wanted) {
       return;
     }
-    const entryMatch = rawLine.match(ENTRY_PATTERN);
-    if (entryMatch) {
-      flush();
-      pending = { line: index + 1, release: currentRelease, text: entryMatch[1].trim() };
-      return;
+    const bullet = rawLine.match(BULLET_PATTERN);
+    if (bullet) {
+      const indent = bullet[1].length;
+      if (topIndent !== null && indent > topIndent) {
+        // Nested bullet: only top-level bullets are entries, so skip it and its continuations.
+        inNested = true;
+        return;
+      }
+      if (indent <= 3) {
+        flush();
+        topIndent = indent;
+        inNested = false;
+        pending = { line: index + 1, release: currentRelease, text: bullet[2].trim() };
+        return;
+      }
     }
     if (pending && CONTINUATION_PATTERN.test(rawLine)) {
-      pending.text = `${pending.text} ${rawLine.trim()}`;
+      if (!inNested) {
+        pending.text = `${pending.text} ${rawLine.trim()}`;
+      }
       return;
     }
     flush();
+    if (rawLine.trim() !== '') {
+      topIndent = null;
+      inNested = false;
+    }
   });
   flush();
 

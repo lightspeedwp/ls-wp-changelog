@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
@@ -150,6 +150,56 @@ describe('verifyChangelog', () => {
     expect(result.passed).toBe(true);
   });
 
+  test('does not let a tilde line inside a backtick fence close it', () => {
+    const content = changelog([
+      '```',
+      '~~~',
+      '```',
+      '- Real entry without links'
+    ]);
+    const result = verifyChangelog(content);
+    expect(result.checked).toBe(1);
+    expect(result.passed).toBe(false);
+  });
+
+  test('closes a fence only with a marker at least as long as the opener', () => {
+    const content = changelog([
+      '````',
+      '```',
+      '- Inside the fence without links',
+      '````',
+      '- Real entry without links'
+    ]);
+    const result = verifyChangelog(content);
+    expect(result.checked).toBe(1);
+    expect(result.failures[0].entry).toBe('Real entry without links');
+  });
+
+  test('ignores link markup that is only a literal code span', () => {
+    const literal = `- Added thing (\`${PR}, ${ISSUE}\`)`;
+    expect(verifyChangelog(changelog([literal])).failures[0].missing).toEqual(['pr', 'issue']);
+    expect(verifyChangelog(changelog([`- Added thing (${PR}, ${ISSUE}) \`code\``])).passed).toBe(true);
+  });
+
+  test('does not count nested bullets as separate entries', () => {
+    const content = changelog([
+      `- Added gallery (${PR}, ${ISSUE})`,
+      '  - Explains the new alignment options',
+      '    - Deeper note without links',
+      `- Fixed bug (${PR}, ${ISSUE})`
+    ]);
+    const result = verifyChangelog(content);
+    expect(result.checked).toBe(2);
+    expect(result.passed).toBe(true);
+  });
+
+  test('does not treat links in a nested bullet as the parent entry links', () => {
+    const content = changelog(['- Parent without links', `  - Child (${PR}, ${ISSUE})`]);
+    const result = verifyChangelog(content);
+    expect(result.checked).toBe(1);
+    expect(result.passed).toBe(false);
+  });
+
   test('handles CRLF line endings', () => {
     const content = changelog([`- Added a (${PR}, ${ISSUE})`]).replace(/\n/g, '\r\n');
     expect(verifyChangelog(content).passed).toBe(true);
@@ -262,22 +312,33 @@ describe('main (in-process)', () => {
 describe('CLI process', () => {
   const script = fileURLToPath(new URL('../scripts/verify-changelog-links.ts', import.meta.url));
   const node = ['--experimental-strip-types', '--no-warnings', script];
+  // Isolated, bounded child processes: temporary HOME/config, minimal environment, hard timeout.
+  const childOptions = () => ({
+    encoding: 'utf8' as const,
+    timeout: 15000,
+    env: {
+      PATH: dirname(process.execPath),
+      HOME: dir,
+      XDG_CONFIG_HOME: dir,
+      NODE_OPTIONS: ''
+    }
+  });
 
   test('exits 0 for a passing changelog at a path containing spaces', () => {
     const file = write('spaced name.md', changelog([`- A (${PR}, ${ISSUE})`]));
-    const out = execFileSync(process.execPath, [...node, file], { encoding: 'utf8' });
+    const out = execFileSync(process.execPath, [...node, file], childOptions());
     expect(out).toContain('✓ All 1 entries');
   });
 
   test('exits non-zero with diagnostics when an entry fails', () => {
     const file = write('cli-bad.md', changelog(['- Missing both']));
-    const result = spawnSync(process.execPath, [...node, file], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [...node, file], childOptions());
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('line 8 [Unreleased]: missing PR link, missing issue link');
   });
 
   test('exits 2 when no file is given', () => {
-    const result = spawnSync(process.execPath, node, { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, node, childOptions());
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Usage:');
   });
