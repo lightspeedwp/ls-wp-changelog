@@ -37,9 +37,6 @@
     "test:bats": "npm run test:bats",
     "test:watch": "npm run test:watch",
     "test:coverage": "npm run test:vitest",
-    "lint": "npm run lint",
-    "validate": "npm run lint && npm test",
-    "check": "npm run validate",
     "help": "less README.md"
   },
   "testing": {
