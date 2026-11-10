@@ -216,6 +216,29 @@ All notable changes to this project are documented here.
     expect(result.output).toContain('Missing required "# Changelog" title');
   });
 
+  test('should reject a title split across lines', () => {
+    const content = `#
+Changelog
+
+## [1.0.0] - 2026-10-30
+
+### Added
+- Feature
+
+`;
+    fs.writeFileSync(path.join(TEMP_DIR, 'split-title.md'), content);
+    const result = validateChangelog('split-title.md');
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('Missing required "# Changelog" title');
+  });
+
+  test('should accept the title with a BOM and CRLF line endings', () => {
+    const content = '\uFEFF# Changelog\r\n\r\n## [1.0.0] - 2026-10-30\r\n\r\n### Added\r\n- Feature\r\n';
+    fs.writeFileSync(path.join(TEMP_DIR, 'bom-crlf.md'), content);
+    const result = validateChangelog('bom-crlf.md');
+    expect(result.output).not.toContain('Missing required "# Changelog" title');
+  });
+
   test('should reject non-existent file', () => {
     const result = validateChangelog('does-not-exist.md');
     expect(result.success).toBe(false);

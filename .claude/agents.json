@@ -198,15 +198,15 @@
     },
     {
       "name": "Changelog Quality Score",
-      "description": "Manual review target: the helper returns a fixed placeholder score and does not compute quality",
+      "description": "Manual gate (unimplemented in the helper): the helper returns a fixed placeholder score and does not compute quality, so reviewers must assess it manually",
       "threshold": 90,
-      "blocking": false
+      "blocking": true
     },
     {
       "name": "Governance Compliance",
-      "description": "Manual review of six governance principles: immutability, atomicity, consistency, completeness, clarity, traceability; not enforced by the helper",
+      "description": "Manual gate (unimplemented in the helper): review the six governance principles (immutability, atomicity, consistency, completeness, clarity, traceability) manually; the helper does not enforce them",
       "threshold": 100,
-      "blocking": false
+      "blocking": true
     }
   ]
 }
