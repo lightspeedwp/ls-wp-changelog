@@ -39,6 +39,8 @@ export interface Release {
   version: string;
   date: string | null;
   categories: Record<string, Entry[]>;
+  /** Link reference definitions used by this release's entries, keyed by their original label. */
+  definitions: Record<string, string>;
 }
 
 export interface SummaryRelease {
@@ -48,6 +50,7 @@ export interface SummaryRelease {
   entryCount: number;
   counts: Record<string, number>;
   entries?: Record<string, Entry[]>;
+  definitions?: Record<string, string>;
   prLinks: EntryLink[];
   issueLinks: EntryLink[];
   entriesWithoutLinks: number;
@@ -58,23 +61,100 @@ export interface SummaryOptions {
 }
 
 const LINK_PATTERN = /\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+const REFERENCE_LINK_PATTERN = /\[([^\]]+)\]\[([^\]]*)\]/g;
+const SHORTCUT_REFERENCE_PATTERN = /(?<!\])\[([^\]]+)\](?![[(:])/g;
+const DEFINITION_PATTERN = /^ {0,3}\[([^\]]+)\]:\s*<?([^\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/;
 const RELEASE_PATTERN = /^##\s+\[([^\]]+)\](?:\s+-\s+(\S+))?/;
 const CATEGORY_PATTERN = /^###\s+(.+?)\s*$/;
 const ENTRY_PATTERN = /^ {0,3}[-*+]\s+(\S.*)$/;
 const CONTINUATION_PATTERN = /^ {2,}\S/;
 const UNCATEGORISED = 'Other';
 
-export function extractLinks(text: string): EntryLink[] {
-  const links: EntryLink[] = [];
-  for (const match of text.matchAll(LINK_PATTERN)) {
-    links.push({ label: match[1], url: match[2], kind: classifyLink(match[1], match[2]) });
+/** A null-prototype map, so category names such as "constructor" or "__proto__" are plain keys. */
+function dictionary<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+function referenceKey(label: string): string {
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Link reference definitions (`[label]: url`) outside code fences, keyed by normalised label. */
+export function collectDefinitions(content: string): Record<string, { label: string; url: string }> {
+  const definitions = dictionary<{ label: string; url: string }>();
+  let fence: { marker: string; length: number } | null = null;
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (fence !== null) {
+      const closer = rawLine.match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (closer && closer[1][0] === fence.marker && closer[1].length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    const opener = rawLine.match(/^\s*(`{3,}|~{3,})/);
+    if (opener) {
+      fence = { marker: opener[1][0], length: opener[1].length };
+      continue;
+    }
+    const match = rawLine.match(DEFINITION_PATTERN);
+    if (match && definitions[referenceKey(match[1])] === undefined) {
+      definitions[referenceKey(match[1])] = { label: match[1], url: match[2] };
+    }
   }
-  return links;
+  return definitions;
+}
+
+interface ResolvedLinks {
+  links: EntryLink[];
+  usedLabels: string[];
+}
+
+function resolveLinks(
+  text: string,
+  definitions: Record<string, { label: string; url: string }>
+): ResolvedLinks {
+  const found: Array<EntryLink & { index: number }> = [];
+  const usedLabels: string[] = [];
+  for (const match of text.matchAll(LINK_PATTERN)) {
+    found.push({
+      index: match.index ?? 0,
+      label: match[1],
+      url: match[2],
+      kind: classifyLink(match[1], match[2])
+    });
+  }
+  const useReference = (index: number, label: string, key: string): void => {
+    const definition = definitions[referenceKey(key)];
+    if (definition === undefined) {
+      return;
+    }
+    usedLabels.push(definition.label);
+    found.push({ index, label, url: definition.url, kind: classifyLink(label, definition.url) });
+  };
+  for (const match of text.matchAll(REFERENCE_LINK_PATTERN)) {
+    useReference(match.index ?? 0, match[1], match[2] === '' ? match[1] : match[2]);
+  }
+  for (const match of text.matchAll(SHORTCUT_REFERENCE_PATTERN)) {
+    useReference(match.index ?? 0, match[1], match[1]);
+  }
+  found.sort((a, b) => a.index - b.index);
+  return {
+    links: found.map(({ label, url, kind }) => ({ label, url, kind })),
+    usedLabels
+  };
+}
+
+export function extractLinks(
+  text: string,
+  definitions: Record<string, { label: string; url: string }> = dictionary()
+): EntryLink[] {
+  return resolveLinks(text, definitions).links;
 }
 
 /** Parse the changelog into releases, categories and entries. Code fences are ignored. */
 export function parseChangelog(content: string): Release[] {
   const releases: Release[] = [];
+  const definitions = collectDefinitions(content);
   let release: Release | null = null;
   let category = UNCATEGORISED;
   let inFence = false;
@@ -83,7 +163,11 @@ export function parseChangelog(content: string): Release[] {
   const flush = (): void => {
     if (pending !== null && release !== null) {
       const text: string = pending;
-      (release.categories[category] ??= []).push({ text, links: extractLinks(text) });
+      const { links, usedLabels } = resolveLinks(text, definitions);
+      (release.categories[category] ??= []).push({ text, links });
+      for (const label of usedLabels) {
+        release.definitions[label] = definitions[referenceKey(label)].url;
+      }
     }
     pending = null;
   };
@@ -100,12 +184,21 @@ export function parseChangelog(content: string): Release[] {
     const releaseMatch = rawLine.match(RELEASE_PATTERN);
     if (releaseMatch) {
       flush();
-      release = { version: releaseMatch[1], date: releaseMatch[2] ?? null, categories: {} };
+      release = {
+        version: releaseMatch[1],
+        date: releaseMatch[2] ?? null,
+        categories: dictionary<Entry[]>(),
+        definitions: dictionary<string>()
+      };
       releases.push(release);
       category = UNCATEGORISED;
       continue;
     }
     if (release === null) {
+      continue;
+    }
+    if (rawLine.trim() === '') {
+      // A blank line does not end the entry: an indented paragraph after it still belongs to it.
       continue;
     }
     const categoryMatch = rawLine.match(CATEGORY_PATTERN);
@@ -158,7 +251,7 @@ function normaliseVersion(version: string): string {
 
 function describe(release: Release, detail: 'full' | 'collapsed'): SummaryRelease {
   const entries = allEntries(release);
-  const counts: Record<string, number> = {};
+  const counts = dictionary<number>();
   for (const [name, list] of Object.entries(release.categories)) {
     counts[name] = list.length;
   }
@@ -175,6 +268,7 @@ function describe(release: Release, detail: 'full' | 'collapsed'): SummaryReleas
   };
   if (detail === 'full') {
     summary.entries = release.categories;
+    summary.definitions = release.definitions;
   }
   return summary;
 }
@@ -213,6 +307,14 @@ function heading(release: { version: string; date: string | null }, level: strin
   return `${level} [${release.version}]${release.date ? ` - ${release.date}` : ''}`;
 }
 
+function definitionBlock(definitions: Record<string, string> | undefined): string[] {
+  const labels = Object.keys(definitions ?? {});
+  if (!definitions || labels.length === 0) {
+    return [];
+  }
+  return ['', ...labels.map((label) => `[${label}]: ${definitions[label]}`)];
+}
+
 function entryBlock(categories: Record<string, Entry[]>, level: string): string[] {
   const out: string[] = [];
   for (const [name, entries] of Object.entries(categories)) {
@@ -239,6 +341,7 @@ export function renderSummary(releases: SummaryRelease[], file: string): string 
     if (release.detail === 'full') {
       out.push(heading(release, '##'));
       out.push(...entryBlock(release.entries ?? {}, '###'));
+      out.push(...definitionBlock(release.definitions));
       continue;
     }
     const counts = Object.entries(release.counts)
@@ -265,6 +368,7 @@ export function renderSummary(releases: SummaryRelease[], file: string): string 
 export function renderNotes(release: Release): string {
   const out = [`# Release notes: ${heading(release, '').trim()}`];
   out.push(...entryBlock(release.categories, '##'));
+  out.push(...definitionBlock(release.definitions));
   if (allEntries(release).length === 0) {
     out.push('', 'No entries.');
   }
