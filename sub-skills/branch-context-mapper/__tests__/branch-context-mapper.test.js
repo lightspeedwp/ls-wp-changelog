@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { analyzeBranch, BRANCH_TYPES } = require('../scripts/branch-context-mapper.cjs');
 
 describe('Branch Context Mapper', () => {
@@ -195,5 +197,43 @@ describe('Branch Context Mapper', () => {
       expect(BRANCH_TYPES.refactor.category).toBe('Changed');
       expect(BRANCH_TYPES.refactor.versionBump).toBeNull();
     });
+  });
+});
+
+describe('Hook and mapper agreement', () => {
+  const lefthook = fs.readFileSync(path.resolve(__dirname, '../../../lefthook.yaml'), 'utf8');
+  const match = lefthook.match(/grep -Eq '([^']+)'/);
+  const hookRegex = match ? new RegExp(match[1]) : null;
+  const protectedBranches = ['main', 'master', 'develop'];
+  const hookAccepts = (branch) => protectedBranches.includes(branch) || hookRegex.test(branch);
+
+  test('should find the branch regex in lefthook.yaml', () => {
+    expect(hookRegex).not.toBeNull();
+  });
+
+  test('should list exactly the mapper branch types', () => {
+    const types = match[1].match(/^\^\(([^)]+)\)/)[1].split('|').sort();
+    expect(types).toEqual(Object.keys(BRANCH_TYPES).sort());
+  });
+
+  test.each([
+    'feat/add-thing',
+    'fix/ls-4773-bug',
+    'chore/',
+    'release/1.2.0',
+    'feat/scope/title',
+    'docs/a/b/c',
+    'feature',
+    'feat',
+    'unknown/thing',
+    'Feature/Oauth',
+    'FIX/bug'
+  ])('hook and mapper agree on %s', (branch) => {
+    expect(hookAccepts(branch)).toBe(analyzeBranch(branch).isValid);
+  });
+
+  test.each(protectedBranches)('hook allows protected branch %s that the mapper rejects', (branch) => {
+    expect(hookAccepts(branch)).toBe(true);
+    expect(analyzeBranch(branch).isValid).toBe(false);
   });
 });

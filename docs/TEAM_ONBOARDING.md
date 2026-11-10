@@ -99,13 +99,12 @@ Output:
 ---
 
 ### 2. **changelog-validator**
-**Purpose:** Validate changelog entries and enforce governance rules.
+**Purpose:** Run a basic changelog format check. Governance and quality review are manual.
 
 **What it does:**
-- Validates Keep a Changelog 1.1.0 format
-- Enforces 6 governance rules (immutability, atomicity, consistency, completeness, clarity, traceability)
-- Calculates quality score (0-100 scale)
-- Confirms readiness for release
+- Checks that the file contains a `# Changelog` title and at least one version heading (`## [x.y.z]` or `## [Unreleased]`)
+- Returns a fixed placeholder score (85 on a pass, 0 on a fail), placeholder governance strings and a `readyForRelease` flag that only mirrors the basic check
+- Does **not** validate version numbers, dates, entry content or the six governance principles; review those manually
 
 **Quick example:**
 ```bash
@@ -113,19 +112,21 @@ cd sub-skills/changelog-validator
 node scripts/validate-changelog.cjs ../../CHANGELOG.md --json
 ```
 
-Output:
+Output (placeholder values; the governance fields are not real checks):
 ```json
 {
-  "score": 91,
-  "readyForRelease": true,
+  "isValid": true,
+  "score": 85,
+  "errors": [],
   "governance": {
-    "immutability": { "passed": true },
-    "atomicity": { "passed": true },
-    "consistency": { "passed": true },
-    "completeness": { "passed": true },
-    "clarity": { "passed": true },
-    "traceability": { "passed": true }
-  }
+    "immutability": "pass",
+    "atomicity": "pass",
+    "consistency": "pass",
+    "completeness": "pass",
+    "clarity": "pass",
+    "traceability": "pass"
+  },
+  "readyForRelease": true
 }
 ```
 
@@ -266,19 +267,16 @@ describe('deprecation-notice rule', () => {
 
 ## 📖 Governance Rules (Quick Reference)
 
-All changelog entries must follow these 6 rules:
+All changelog entries should follow these 6 principles. They are manual review guidance; the helpers do not enforce them:
 
 1. **Immutability** — Released versions never change (only [Unreleased] is mutable)
 2. **Atomicity** — Each entry references exactly one PR or issue
 3. **Consistency** — All entries follow Keep a Changelog format
 4. **Completeness** — [Unreleased] section is empty before release
-5. **Clarity** — Entries meet minimum quality thresholds (score ≥ 90)
+5. **Clarity** — Entries are clear and meet your team's quality bar (reviewed manually)
 6. **Traceability** — Every entry links to code (PR/issue/commit)
 
-**Quality Scoring (0-100 scale):**
-- 90+ = Production-ready (✅ can release)
-- 80-89 = Good (⚠️ needs minor polish)
-- <80 = Needs work (❌ request changes)
+**Quality review (manual):** The helper score is a fixed placeholder, not a quality measure. Review entries by hand: production-ready entries are clear, linked and correctly categorised; otherwise request changes.
 
 ---
 
@@ -359,7 +357,7 @@ git checkout -b feature/add-block-alignment-controls
 # 2. Make your changes
 # ... edit code ...
 
-# 3. Write changelog entry (validator checks quality)
+# 3. Write changelog entry (review quality manually; the helper checks only the basic format)
 # Edit CHANGELOG.md with new entry
 
 # 4. Commit (lefthook runs pre-commit checks)
@@ -374,8 +372,8 @@ Fixes #42"
 # 5. Push (pre-push hook runs final validation)
 git push origin feature/add-block-alignment-controls
 
-# 6. Create PR (validator scores changelog entry)
-# GitHub CI runs full test suite
+# 6. Create PR (review the changelog entry manually)
+# Illustrative workflow: this repository has no CI workflow yet
 ```
 
 ### Workflow 2: Review and Approve a PR
@@ -388,16 +386,16 @@ git push origin feature/add-block-alignment-controls
 # Run validator locally:
 cd sub-skills/changelog-validator
 node scripts/validate-changelog.cjs ../../CHANGELOG.md --json
-# Score: 87 — Good, but request minor polish
+# The helper only checks the basic format (placeholder score); assess entry quality manually
 
 # 3. Request changes:
-# "Excellent work! Entry score is 87. Please add a link to the related issue for full traceability."
+# "Excellent work! Please add a link to the related issue for full traceability."
 
 # 4. Author updates and re-commits
-# Score rises to 92 ✅
+# Re-review the updated entry manually
 
 # 5. Approve and merge
-# Release CI validates full changelog is ready
+# Illustrative: a release CI check is a target, not something this repository provides yet
 ```
 
 ### Workflow 3: Cut a Release
@@ -406,7 +404,7 @@ node scripts/validate-changelog.cjs ../../CHANGELOG.md --json
 # 1. Verify changelog is release-ready
 cd sub-skills/changelog-validator
 node scripts/validate-changelog.cjs CHANGELOG.md
-# Score: 94, readyForRelease: true ✅
+# Basic format check passes (placeholder score 85); review release readiness manually
 
 # 2. Create release branch
 git checkout -b release/1.2.0
@@ -463,7 +461,7 @@ open coverage/lcov-report/index.html
 
 ### "Changelog validation failed"
 
-**Cause:** The changelog is missing its title, a version heading, or has an invalid version or date.
+**Cause:** The changelog is missing its `# Changelog` title or has no version heading.
 
 **Run the validator to see what failed:**
 ```bash
@@ -471,7 +469,7 @@ cd sub-skills/changelog-validator
 node scripts/validate-changelog.cjs ../../CHANGELOG.md --json
 ```
 
-The helper only checks the basic format and returns a fixed placeholder score. Entry quality (missing issue/PR links, length, unclear language) is reviewed manually.
+This nested helper only checks for the title and a version-heading pattern, so it does not catch an invalid version number or date (for example `## [1.2.3] - not-a-date` passes). Review versions, dates and entry quality (missing issue/PR links, length, unclear language) manually. The separate root validator (`node scripts/validate-changelog.cjs CHANGELOG.md` from the repository root, used by the pre-commit hook) checks the title and the release structure more strictly.
 
 **Fix:** Update your entry with:
 - Clear, action-oriented description
