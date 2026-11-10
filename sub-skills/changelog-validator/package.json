@@ -1,7 +1,7 @@
 {
   "name": "changelog-validator",
   "version": "1.0.0",
-  "description": "Validates changelog format and enforces governance rules",
+  "description": "Basic changelog helper: checks for a '# Changelog' title and a version heading, and returns placeholder score and governance fields. Governance review is manual.",
   "main": "scripts/validate-changelog.cjs",
   "repository": {
     "type": "git",
