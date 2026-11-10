@@ -36,7 +36,7 @@ class ChangelogValidator {
       const content = fs.readFileSync(this.filePath, 'utf8');
 
       // 3. Require the "# Changelog" title
-      if (!/^#\s+Changelog\s*$/m.test(content.replace(/^\uFEFF/, ''))) {
+      if (!/^#[ \t]+Changelog[ \t]*$/m.test(content.replace(/^\uFEFF/, ''))) {
         this.errors.push('Missing required "# Changelog" title');
       }
 
